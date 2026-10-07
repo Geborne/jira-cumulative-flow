@@ -23,7 +23,7 @@
   body{
     margin:0; background:var(--bg); color:var(--text);
     font-family:var(--font-body); font-size:14px; line-height:1.5;
-    padding-inline:20px; padding-block:0 56px;
+    padding-inline:20px; padding-block:20px 56px;
   }
   .wrap{max-width:1080px; margin:0 auto; display:flex; flex-direction:column; gap:22px;}
   header{
@@ -111,18 +111,6 @@
 <body>
 
 <div class="wrap">
-  <header>
-    <div>
-      <h1>Cumulative Flow</h1>
-      <div class="sub">Geborne's Jira · Stories + Tasks · since 4 Jan 2026</div>
-    </div>
-    <div class="source">
-      <span class="badge" id="badge">Saved copy</span>
-      <span id="asof"></span>
-      <button class="linkbtn" id="refresh" type="button" hidden>Refresh</button>
-    </div>
-  </header>
-
   <p class="notice" id="notice" role="status" hidden></p>
 
   <div class="controls">
@@ -295,7 +283,7 @@
 
   function renderHeader() {
     var all = state.data;
-    $('asof').textContent = all.length ? 'Last snapshot ' + fmt(all[all.length - 1].t, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
+    if ($('asof')) $('asof').textContent = all.length ? 'Last snapshot ' + fmt(all[all.length - 1].t, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
   }
 
   function renderLegend(days, used) {
@@ -488,7 +476,7 @@
 
   // ---- data.json sits next to this page and is rewritten every night (falls back to the copy saved in the page) ----
   var badge = $('badge'), notice = $('notice'), refresh = $('refresh');
-  function setBadge(text, live) { badge.textContent = text; badge.className = live ? 'badge live' : 'badge'; }
+  function setBadge(text, live) { if (!badge) return; badge.textContent = text; badge.className = live ? 'badge live' : 'badge'; }
   function say(text) { notice.textContent = text || ''; notice.hidden = !text; }
   var savedDay = savedData.length ? fmt(savedData[savedData.length - 1].t, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 
@@ -515,8 +503,7 @@
   }
   function startLive() {
     if (!window.fetch) return;
-    refresh.hidden = false;
-    refresh.addEventListener('click', function () { load(true); });
+    if (refresh) { refresh.hidden = false; refresh.addEventListener('click', function () { load(true); }); }
     load(false);
     // A Notion embed can stay open for days: look again every hour and whenever the tab comes back.
     setInterval(function () { load(false); }, 3600000);
