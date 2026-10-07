@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<style>body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Cumulative Flow</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=DM+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one 1080px column. Header, one filter row, then a single wide chart panel
+     with its legend on top and the numbers table underneath. Same warm-dark look as the sprint dashboards. */
+  :root{
+    color-scheme: dark;
+    --bg:#1b1512; --panel:#241d18; --panel-2:#2b231d; --border:#3a2f27; --grid:#30271f;
+    --text:#f1e7d9; --muted:#a8998a; --muted-2:#7d7064; --gold:#d4a24c;
+    --s-done:#754726; --s-scrapped:#945831; --s-progress:#d26c28;
+    --s-blocked:#e58c40; --s-todo:#ecb073; --s-backlog:#efd3ac;
+    --font-display:'Fraunces', Georgia, 'Times New Roman', serif;
+    --font-body:'DM Mono', ui-monospace, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--font-body); font-size:14px; line-height:1.5;
+    padding-inline:20px; padding-block:0 56px;
+  }
+  .wrap{max-width:1080px; margin:0 auto; display:flex; flex-direction:column; gap:22px;}
+  header{
+    padding:34px 0 22px; border-bottom:1px solid var(--border);
+    display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:12px 24px;
+  }
+  h1{font-family:var(--font-display); font-size:30px; font-weight:600; margin:0; line-height:1.15; text-wrap:balance;}
+  .sub{color:var(--muted); font-size:13px; margin-top:6px;}
+  .source{display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; font-size:12px; color:var(--muted);}
+  .badge{
+    font-size:11px; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap;
+    padding:4px 11px; border-radius:999px; border:1px solid var(--border); color:var(--muted);
+  }
+  .badge.live{background:var(--gold); border-color:var(--gold); color:#1b1512; font-weight:500;}
+  .linkbtn{
+    font:inherit; font-size:12px; color:var(--gold); background:transparent;
+    border:1px solid var(--border); border-radius:8px; padding:4px 10px; cursor:pointer;
+  }
+  .linkbtn:hover{background:var(--panel-2);}
+  .notice{font-size:12px; color:var(--muted); margin:-8px 0 0;}
+
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:10px 24px;}
+  .group{display:flex; align-items:center; gap:10px;}
+  .group-label{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);}
+  .seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+  .seg button{
+    font:inherit; font-size:12px; background:transparent; color:var(--muted);
+    border:0; padding:7px 13px; cursor:pointer;
+  }
+  .seg button + button{border-left:1px solid var(--border);}
+  .seg button:hover{color:var(--text);}
+  .seg button[aria-pressed="true"]{background:var(--panel-2); color:var(--text);}
+  button:focus-visible, summary:focus-visible, svg:focus-visible{outline:2px solid var(--gold); outline-offset:2px;}
+
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px 18px 14px; min-width:0;}
+  .legend{display:flex; flex-wrap:wrap; gap:8px 22px; font-size:12.5px; color:var(--muted); margin-bottom:12px;}
+  .legend .item{display:inline-flex; align-items:center; gap:7px; white-space:nowrap;}
+  .legend .sw{width:10px; height:10px; border-radius:3px; display:inline-block;}
+  .legend b{color:var(--text); font-weight:500;}
+  .legend .total{margin-left:auto;}
+
+  .chart{position:relative;}
+  .chart svg{display:block; width:100%; touch-action:pan-y; cursor:crosshair;}
+  .chart text{font-family:var(--font-body); font-size:10.5px; fill:var(--muted);}
+  .chart text.end{fill:var(--text); font-size:11.5px;}
+  .tip{
+    position:absolute; top:0; left:0; pointer-events:none; z-index:2;
+    background:var(--bg); border:1px solid var(--border); border-radius:8px;
+    padding:10px 12px; font-size:12px; min-width:172px;
+    box-shadow:0 8px 24px rgba(0,0,0,.45);
+  }
+  .tip .when{color:var(--muted); margin-bottom:7px; white-space:nowrap;}
+  .tip .row{display:grid; grid-template-columns:14px 1fr auto; align-items:center; gap:8px; line-height:1.7;}
+  .tip .key{display:block; height:2px; width:14px; border-radius:1px;}
+  .tip .name{color:var(--muted);}
+  .tip .val{color:var(--text); font-weight:500; font-variant-numeric:tabular-nums;}
+  .tip .sum{border-top:1px solid var(--border); margin-top:6px; padding-top:5px;}
+
+  .footnote{
+    margin-top:12px; padding-top:11px; border-top:1px dashed var(--border);
+    color:var(--muted); font-size:12px; line-height:1.6;
+  }
+  .footnote span{display:block; max-width:78ch;}
+  details{margin-top:14px;}
+  summary{cursor:pointer; color:var(--gold); font-size:12.5px; width:max-content; max-width:100%;}
+  .table-scroll{overflow:auto; max-height:360px; margin-top:12px; border:1px solid var(--border); border-radius:8px;}
+  table{width:100%; min-width:620px; border-collapse:collapse; font-size:12.5px; font-variant-numeric:tabular-nums;}
+  th{
+    position:sticky; top:0; background:var(--panel-2); text-align:right; padding:8px 12px;
+    color:var(--muted); text-transform:uppercase; font-size:10.5px; letter-spacing:.05em; font-weight:500;
+    border-bottom:1px solid var(--border);
+  }
+  td{padding:7px 12px; border-bottom:1px solid var(--border); text-align:right;}
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2){text-align:left;}
+  td:nth-child(2){color:var(--muted);}
+  tr:last-child td{border-bottom:0;}
+
+  @media (max-width:560px){
+    h1{font-size:25px;}
+    .panel{padding:14px 12px 12px;}
+    .legend .total{margin-left:0;}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Cumulative Flow</h1>
+      <div class="sub">Geborne's Jira · Stories + Tasks · since 4 Jan 2026</div>
+    </div>
+    <div class="source">
+      <span class="badge" id="badge">Saved copy</span>
+      <span id="asof"></span>
+      <button class="linkbtn" id="refresh" type="button" hidden>Refresh</button>
+    </div>
+  </header>
+
+  <p class="notice" id="notice" role="status" hidden></p>
+
+  <div class="controls">
+    <div class="group">
+      <span class="group-label" id="lbl-range">Range</span>
+      <div class="seg" role="group" aria-labelledby="lbl-range">
+        <button type="button" id="range-all" data-range="all" aria-pressed="true">All</button>
+        <button type="button" id="range-90" data-range="90" aria-pressed="false">90 days</button>
+        <button type="button" id="range-30" data-range="30" aria-pressed="false">30 days</button>
+      </div>
+    </div>
+    <div class="group">
+      <span class="group-label" id="lbl-detail">Detail</span>
+      <div class="seg" role="group" aria-labelledby="lbl-detail">
+        <button type="button" id="detail-week" data-detail="week" aria-pressed="true">Weekly</button>
+        <button type="button" id="detail-day" data-detail="day" aria-pressed="false">Daily</button>
+      </div>
+    </div>
+  </div>
+
+  <section class="panel">
+    <div class="legend" id="legend"></div>
+    <div class="chart" id="chart">
+      <svg id="svg" tabindex="0" role="img" aria-label="Stacked area chart of issues per status over time. Use the left and right arrow keys to read each point; the same numbers are in the table below."></svg>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+    <div class="footnote" id="footnote"></div>
+    <details id="numbers">
+      <summary>Show the numbers</summary>
+      <div class="table-scroll"><table id="table"></table></div>
+    </details>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // Stack order, bottom to top (so the picture reads top down: Done, In Progress, Blocked, To Do, Backlog, Scrapped).
+  // Colour follows the status, never its position.
+  var STATUSES = [
+    { label: 'Scrapped',    color: 'var(--s-scrapped)' },
+    { label: 'Backlog',     color: 'var(--s-backlog)' },
+    { label: 'To Do',       color: 'var(--s-todo)' },
+    { label: 'Blocked',     color: 'var(--s-blocked)' },
+    { label: 'In Progress', color: 'var(--s-progress)' },
+    { label: 'Done',        color: 'var(--s-done)' }
+  ];
+  var DAY = 86400000;
+  var WEEK0 = Date.UTC(2026, 0, 4);      // a Sunday: weeks run Sunday to Saturday
+  var REBUILT_UNTIL = '2026-10-01';      // days up to here were rebuilt from timestamps
+
+  // Copy of the snapshot table saved when this page was published (date:done,scrapped,in progress,blocked,to do,backlog).
+  var SAVED = "2026-01-04:0,0,9,0,17,24;2026-01-05:0,0,10,0,17,24;2026-01-06:0,0,10,0,17,25;2026-01-07:0,0,10,0,17,26;2026-01-08:1,0,10,0,17,26;2026-01-09:1,0,10,0,17,26;2026-01-10:1,0,10,0,17,26;2026-01-11:1,0,10,0,17,26;2026-01-12:3,0,10,0,16,26;2026-01-13:4,0,9,0,16,26;2026-01-14:4,0,9,0,16,26;2026-01-15:5,0,9,0,15,27;2026-01-16:5,0,10,0,15,27;2026-01-17:5,0,10,0,15,28;2026-01-18:5,0,10,0,15,28;2026-01-19:5,0,11,0,14,28;2026-01-20:5,0,11,0,14,28;2026-01-21:6,0,10,0,14,28;2026-01-22:6,0,10,0,14,28;2026-01-23:6,0,10,0,14,28;2026-01-24:6,0,10,0,14,28;2026-01-25:6,0,10,0,14,28;2026-01-26:6,0,10,0,14,28;2026-01-27:6,0,10,0,14,28;2026-01-28:6,0,10,0,14,28;2026-01-29:6,0,10,0,14,28;2026-01-30:6,2,10,0,14,26;2026-01-31:6,2,10,0,14,27;2026-02-01:6,2,10,0,14,27;2026-02-02:6,2,10,0,15,27;2026-02-03:6,2,10,0,15,27;2026-02-04:6,2,11,0,15,27;2026-02-05:6,2,11,0,15,27;2026-02-06:6,2,11,0,15,27;2026-02-07:6,2,11,0,15,27;2026-02-08:6,2,11,0,15,27;2026-02-09:6,2,11,0,15,27;2026-02-10:6,2,11,0,15,27;2026-02-11:6,2,11,0,15,27;2026-02-12:6,2,11,0,15,27;2026-02-13:6,2,11,0,15,27;2026-02-14:6,2,11,0,15,27;2026-02-15:6,2,11,0,15,27;2026-02-16:7,2,10,0,15,27;2026-02-17:7,2,10,0,15,27;2026-02-18:7,2,10,0,15,27;2026-02-19:7,2,11,0,15,27;2026-02-20:8,2,10,0,15,27;2026-02-21:8,2,10,0,15,27;2026-02-22:8,2,10,0,15,27;2026-02-23:9,4,9,0,14,26;2026-02-24:9,4,9,0,14,26;2026-02-25:10,4,8,0,14,27;2026-02-26:10,4,8,0,14,27;2026-02-27:10,4,9,0,13,28;2026-02-28:10,4,9,0,13,28;2026-03-01:10,4,9,0,13,28;2026-03-02:10,4,9,0,13,29;2026-03-03:10,4,9,0,13,29;2026-03-04:10,4,9,0,13,29;2026-03-05:10,4,9,0,13,29;2026-03-06:10,4,9,0,13,29;2026-03-07:10,4,9,0,13,29;2026-03-08:10,4,9,0,13,29;2026-03-09:10,4,9,0,13,29;2026-03-10:10,4,9,0,13,29;2026-03-11:10,4,9,0,13,29;2026-03-12:10,4,9,0,13,30;2026-03-13:10,4,9,0,13,30;2026-03-14:10,4,9,0,13,30;2026-03-15:10,4,9,0,13,30;2026-03-16:10,4,9,0,13,31;2026-03-17:10,4,9,0,13,31;2026-03-18:10,4,10,0,13,30;2026-03-19:10,4,11,0,13,29;2026-03-20:10,4,11,0,13,30;2026-03-21:10,4,11,0,13,30;2026-03-22:10,4,11,0,13,30;2026-03-23:10,4,11,0,13,30;2026-03-24:10,4,12,0,13,30;2026-03-25:10,4,12,0,13,30;2026-03-26:10,4,12,0,13,30;2026-03-27:10,4,12,0,13,30;2026-03-28:10,4,12,0,13,30;2026-03-29:11,4,11,0,13,30;2026-03-30:11,4,11,0,13,30;2026-03-31:11,4,11,0,13,30;2026-04-01:11,4,11,0,13,30;2026-04-02:11,4,11,0,13,30;2026-04-03:13,4,9,0,13,30;2026-04-04:13,4,9,0,13,30;2026-04-05:13,4,9,0,13,30;2026-04-06:13,4,9,0,13,30;2026-04-07:13,4,10,0,13,29;2026-04-08:13,4,10,0,13,29;2026-04-09:13,4,10,0,13,29;2026-04-10:13,4,10,0,13,29;2026-04-11:13,4,10,0,13,29;2026-04-12:13,4,10,0,13,29;2026-04-13:13,4,11,0,13,29;2026-04-14:14,4,10,0,13,29;2026-04-15:14,4,10,0,13,29;2026-04-16:14,4,10,0,13,29;2026-04-17:14,4,10,0,13,30;2026-04-18:14,4,10,0,13,30;2026-04-19:14,4,10,0,13,30;2026-04-20:14,4,10,0,13,30;2026-04-21:14,4,10,0,13,30;2026-04-22:14,5,9,0,13,30;2026-04-23:14,5,9,0,13,30;2026-04-24:14,6,9,0,13,30;2026-04-25:14,6,9,0,13,30;2026-04-26:14,6,9,0,13,30;2026-04-27:15,6,9,0,13,30;2026-04-28:15,6,9,0,13,32;2026-04-29:16,6,9,0,13,32;2026-04-30:17,6,10,0,13,32;2026-05-01:17,6,11,0,13,33;2026-05-02:17,6,11,0,13,33;2026-05-03:17,6,11,0,13,33;2026-05-04:17,6,11,0,13,33;2026-05-05:20,6,9,0,13,32;2026-05-06:21,6,9,0,13,32;2026-05-07:21,6,9,0,13,32;2026-05-08:21,6,9,0,13,32;2026-05-09:21,6,9,0,13,32;2026-05-10:21,6,9,0,13,32;2026-05-11:21,6,9,0,13,32;2026-05-12:21,6,9,0,13,32;2026-05-13:21,6,9,0,13,32;2026-05-14:21,6,9,0,13,32;2026-05-15:22,6,9,0,13,31;2026-05-16:22,6,9,0,13,31;2026-05-17:22,6,9,0,13,32;2026-05-18:22,6,9,0,13,32;2026-05-19:23,6,9,0,13,32;2026-05-20:24,6,8,0,13,32;2026-05-21:24,6,8,0,13,32;2026-05-22:25,6,7,0,13,32;2026-05-23:25,6,7,0,13,32;2026-05-24:25,6,7,0,13,32;2026-05-25:25,6,7,0,13,34;2026-05-26:26,7,10,0,14,32;2026-05-27:31,9,8,0,11,32;2026-05-28:31,9,8,0,11,34;2026-05-29:31,9,8,0,11,37;2026-05-30:31,9,9,0,10,37;2026-05-31:36,9,7,0,10,37;2026-06-01:41,9,6,0,10,35;2026-06-02:42,9,6,0,10,36;2026-06-03:42,9,6,0,10,36;2026-06-04:42,9,6,0,10,36;2026-06-05:44,9,5,0,10,35;2026-06-06:44,9,5,0,10,35;2026-06-07:44,9,5,0,10,35;2026-06-08:44,10,4,0,10,35;2026-06-09:44,10,4,0,11,34;2026-06-10:45,10,3,0,11,34;2026-06-11:45,10,3,0,11,34;2026-06-12:46,10,3,0,10,34;2026-06-13:46,10,3,0,10,34;2026-06-14:46,12,2,0,9,34;2026-06-15:47,13,1,0,9,34;2026-06-16:50,14,1,0,6,34;2026-06-17:50,14,1,0,6,34;2026-06-18:50,14,1,0,6,35;2026-06-19:50,14,1,0,6,36;2026-06-20:50,14,1,0,6,36;2026-06-21:50,14,1,0,7,36;2026-06-22:50,14,1,0,7,37;2026-06-23:50,14,1,0,7,37;2026-06-24:50,14,1,0,8,37;2026-06-25:51,14,1,0,7,37;2026-06-26:52,14,1,0,6,37;2026-06-27:52,14,1,0,6,37;2026-06-28:52,14,1,0,6,37;2026-06-29:52,14,1,0,6,37;2026-06-30:52,14,1,0,6,37;2026-07-01:52,14,1,0,6,37;2026-07-02:52,14,2,0,8,36;2026-07-03:52,14,2,0,8,36;2026-07-04:52,14,2,0,8,36;2026-07-05:52,14,2,0,8,36;2026-07-06:52,14,2,0,8,36;2026-07-07:53,14,2,0,8,36;2026-07-08:53,14,2,0,8,36;2026-07-09:53,14,2,0,8,36;2026-07-10:54,14,3,0,8,37;2026-07-11:54,14,3,0,8,37;2026-07-12:54,14,3,0,8,37;2026-07-13:55,14,2,0,8,37;2026-07-14:55,14,2,0,8,37;2026-07-15:55,14,2,0,8,37;2026-07-16:56,14,1,0,8,37;2026-07-17:56,14,1,0,8,37;2026-07-18:56,14,1,0,8,37;2026-07-19:56,14,1,0,8,37;2026-07-20:56,14,2,0,8,37;2026-07-21:56,14,2,0,8,37;2026-07-22:56,14,2,0,8,37;2026-07-23:56,14,2,0,8,37;2026-07-24:56,14,2,0,8,37;2026-07-25:56,14,2,0,8,37;2026-07-26:56,14,2,0,8,37;2026-07-27:56,14,3,0,9,37;2026-07-28:56,14,3,0,9,37;2026-07-29:57,14,2,0,9,37;2026-07-30:58,14,2,0,9,37;2026-07-31:58,14,2,0,9,37;2026-08-01:58,14,2,0,9,37;2026-08-02:58,14,2,0,9,37;2026-08-03:58,14,2,0,11,36;2026-08-04:58,14,2,0,11,36;2026-08-05:58,14,2,0,11,36;2026-08-06:58,14,2,0,11,37;2026-08-07:61,14,2,0,11,35;2026-08-08:61,14,3,0,10,35;2026-08-09:61,14,3,0,10,35;2026-08-10:61,14,3,0,10,36;2026-08-11:61,14,4,0,9,36;2026-08-12:61,14,4,0,9,36;2026-08-13:61,14,4,0,10,36;2026-08-14:63,14,3,0,10,36;2026-08-15:63,14,3,0,10,36;2026-08-16:64,15,2,0,10,36;2026-08-17:64,15,3,0,9,36;2026-08-18:65,15,2,0,9,36;2026-08-19:66,15,1,0,9,37;2026-08-20:66,15,1,0,9,37;2026-08-21:66,15,2,0,8,38;2026-08-22:66,15,2,0,10,37;2026-08-23:66,15,2,0,10,37;2026-08-24:67,15,2,0,10,38;2026-08-25:67,15,3,0,9,38;2026-08-26:67,15,3,0,9,38;2026-08-27:67,15,3,0,9,38;2026-08-28:68,15,2,0,10,37;2026-08-29:68,15,2,0,10,37;2026-08-30:68,15,2,0,10,37;2026-08-31:69,15,2,0,10,37;2026-09-01:69,15,2,0,10,37;2026-09-02:70,15,2,0,9,37;2026-09-03:70,15,2,0,9,37;2026-09-04:70,15,2,0,9,37;2026-09-05:70,15,2,0,9,37;2026-09-06:70,15,2,0,10,37;2026-09-07:70,15,3,0,10,37;2026-09-08:72,15,2,0,9,37;2026-09-09:72,15,3,0,8,37;2026-09-10:73,15,2,0,9,38;2026-09-11:74,15,2,0,8,38;2026-09-12:74,17,4,0,6,36;2026-09-13:74,17,5,0,6,37;2026-09-14:74,17,5,0,6,37;2026-09-15:74,17,6,0,6,36;2026-09-16:74,17,6,0,6,36;2026-09-17:74,17,6,0,6,36;2026-09-18:74,17,6,0,6,36;2026-09-19:74,17,6,0,6,36;2026-09-20:74,17,6,0,6,36;2026-09-21:76,17,6,0,4,36;2026-09-22:76,17,6,0,4,36;2026-09-23:76,17,7,0,4,36;2026-09-24:78,20,5,0,1,37;2026-09-25:79,20,5,0,1,36;2026-09-26:79,20,5,0,1,36;2026-09-27:79,20,5,0,1,36;2026-09-28:78,20,7,0,2,34;2026-09-29:79,20,6,0,2,35;2026-09-30:79,20,7,0,2,35;2026-10-01:79,20,7,0,2,35;2026-10-02:84,20,6,0,0,33;2026-10-03:84,20,6,0,0,33";
+
+  function parsePacked(str) {
+    var seen = {}, out = [];
+    String(str || '').split(';').forEach(function (tok) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})[^:]*:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)$/.exec(tok.trim());
+      if (!m) return;
+      var iso = m[1] + '-' + m[2] + '-' + m[3];
+      if (seen[iso]) return;
+      seen[iso] = true;
+      var v = [+m[5], +m[9], +m[8], +m[7], +m[6], +m[4]];   // scrapped, backlog, to do, blocked, in progress, done
+      out.push({ t: Date.UTC(+m[1], +m[2] - 1, +m[3]), iso: iso, v: v, total: v.reduce(function (a, b) { return a + b; }, 0) });
+    });
+    out.sort(function (a, b) { return a.t - b.t; });
+    return out;
+  }
+
+  var savedData = parsePacked(SAVED);
+  var state = { data: savedData, range: 'all', detail: 'week', hover: -1 };
+  try {
+    var r = localStorage.getItem('cfd-range'), d = localStorage.getItem('cfd-detail');
+    if (r === 'all' || r === '90' || r === '30') state.range = r;
+    if (d === 'week' || d === 'day') state.detail = d;
+  } catch (e) {}
+
+  var $ = function (id) { return document.getElementById(id); };
+  var svg = $('svg'), tip = $('tip'), chartBox = $('chart');
+  var NS = 'http://www.w3.org/2000/svg';
+  function el(name, attrs, parent) {
+    var n = document.createElementNS(NS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function h(tag, cls, text, parent) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+
+  // Dates are calendar days, handled in UTC so no timezone can shift them.
+  function fmt(t, opts) { opts.timeZone = 'UTC'; return new Date(t).toLocaleDateString('en-GB', opts); }
+  function firstSunday(year) {
+    var wd = new Date(Date.UTC(year, 0, 1)).getUTCDay();
+    return Date.UTC(year, 0, 1 + ((7 - wd) % 7));
+  }
+  // Sprint rule: S01 starts on the first Sunday of the year, sprints run Sunday to Friday, Saturday is outside any sprint.
+  function sprintOf(t) {
+    if (new Date(t).getUTCDay() === 6) return 'off-sprint';
+    var y = new Date(t).getUTCFullYear(), a = firstSunday(y);
+    if (t < a) a = firstSunday(y - 1);
+    var n = Math.floor((t - a) / DAY / 7) + 1;
+    return 'S' + (n < 10 ? '0' + n : n);
+  }
+
+  function sprintLabel(t) {
+    return (state.detail === 'week' && new Date(t).getUTCDay() === 6) ? sprintOf(t - DAY) : sprintOf(t);
+  }
+
+  function visibleDays() {
+    var all = state.data;
+    if (!all.length || state.range === 'all') return all;
+    var from = all[all.length - 1].t - (parseInt(state.range, 10) - 1) * DAY;
+    return all.filter(function (p) { return p.t >= from; });
+  }
+  function plotted(days) {
+    if (state.detail === 'day' || days.length < 3) return days;
+    var out = [], lastWeek = null;
+    days.forEach(function (p) {
+      var w = Math.floor((p.t - WEEK0) / DAY / 7);
+      if (w === lastWeek) out[out.length - 1] = p; else { out.push(p); lastWeek = w; }
+    });
+    if (out[0] !== days[0]) out.unshift(days[0]);   // start the curve at the first day in range
+    return out;
+  }
+
+  // Monotone cubic: a smooth curve that never overshoots the real values.
+  function tangents(p) {
+    var n = p.length, m = new Array(n), s = [], hh = [], i;
+    for (i = 0; i < n - 1; i++) { hh[i] = p[i + 1].x - p[i].x; s[i] = hh[i] ? (p[i + 1].y - p[i].y) / hh[i] : 0; }
+    m[0] = s[0]; m[n - 1] = s[n - 2];
+    for (i = 1; i < n - 1; i++) {
+      if (s[i - 1] * s[i] <= 0) { m[i] = 0; continue; }
+      var q = (s[i - 1] * hh[i] + s[i] * hh[i - 1]) / (hh[i - 1] + hh[i]);
+      m[i] = (Math.sign(s[i - 1]) + Math.sign(s[i])) * Math.min(Math.abs(s[i - 1]), Math.abs(s[i]), 0.5 * Math.abs(q));
+    }
+    return m;
+  }
+  function f(n) { return Math.round(n * 100) / 100; }
+  function curve(p, reverse) {
+    var m = tangents(p), out = '', i, dx;
+    if (!reverse) {
+      for (i = 0; i < p.length - 1; i++) {
+        dx = (p[i + 1].x - p[i].x) / 3;
+        out += 'C' + f(p[i].x + dx) + ' ' + f(p[i].y + m[i] * dx) + ' ' + f(p[i + 1].x - dx) + ' ' + f(p[i + 1].y - m[i + 1] * dx) + ' ' + f(p[i + 1].x) + ' ' + f(p[i + 1].y);
+      }
+    } else {
+      for (i = p.length - 1; i > 0; i--) {
+        dx = (p[i].x - p[i - 1].x) / 3;
+        out += 'C' + f(p[i].x - dx) + ' ' + f(p[i].y - m[i] * dx) + ' ' + f(p[i - 1].x + dx) + ' ' + f(p[i - 1].y + m[i - 1] * dx) + ' ' + f(p[i - 1].x) + ' ' + f(p[i - 1].y);
+      }
+    }
+    return out;
+  }
+
+  var geo = null; // geometry of the current render, used by the hover layer
+
+  function render() {
+    var days = visibleDays(), pts = plotted(days);
+    var used = STATUSES.map(function (_, k) { return days.some(function (p) { return p.v[k] > 0; }); });
+    renderHeader(); renderLegend(days, used); renderChart(days, pts, used); renderTable(pts, used); renderFootnote(days);
+    ['range-all', 'range-90', 'range-30'].forEach(function (id) { $(id).setAttribute('aria-pressed', String($(id).dataset.range === state.range)); });
+    ['detail-week', 'detail-day'].forEach(function (id) { $(id).setAttribute('aria-pressed', String($(id).dataset.detail === state.detail)); });
+  }
+
+  function renderHeader() {
+    var all = state.data;
+    $('asof').textContent = all.length ? 'Last snapshot ' + fmt(all[all.length - 1].t, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  }
+
+  function renderLegend(days, used) {
+    var box = $('legend'); box.textContent = '';
+    if (!days.length) return;
+    var last = days[days.length - 1];
+    for (var k = STATUSES.length - 1; k >= 0; k--) {
+      if (!used[k]) continue;
+      var it = h('span', 'item', null, box);
+      var sw = h('span', 'sw', null, it); sw.style.background = STATUSES[k].color;
+      h('span', null, STATUSES[k].label, it);
+      h('b', null, String(last.v[k]), it);
+    }
+    var tot = h('span', 'item total', null, box);
+    h('span', null, 'Total', tot);
+    h('b', null, String(last.total), tot);
+  }
+
+  function renderChart(days, pts, used) {
+    svg.textContent = ''; hideTip(); geo = null;
+    var W = Math.max(280, Math.floor(chartBox.clientWidth));
+    var H = W < 520 ? 270 : 400;
+    var M = { l: 34, r: 40, t: 16, b: 28 };
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.setAttribute('height', H);
+    if (pts.length < 2) {
+      var msg = el('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle' }, svg);
+      msg.textContent = 'Not enough snapshots in this range yet.';
+      return;
+    }
+    var t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+    var maxTotal = Math.max.apply(null, days.map(function (p) { return p.total; }));
+    var step = maxTotal <= 20 ? 5 : maxTotal <= 50 ? 10 : maxTotal <= 100 ? 20 : maxTotal <= 250 ? 50 : 100;
+    var yMax = Math.ceil(maxTotal / step) * step;
+    var X = function (t) { return M.l + (t - t0) / (t1 - t0) * (W - M.l - M.r); };
+    var Y = function (v) { return M.t + (1 - v / yMax) * (H - M.t - M.b); };
+
+    // gridlines and y ticks
+    var g = el('g', {}, svg), v;
+    for (v = 0; v <= yMax; v += step) {
+      el('line', { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? 'var(--border)' : 'var(--grid)', 'stroke-width': 1 }, g);
+      el('text', { x: M.l - 8, y: Y(v) + 3.5, 'text-anchor': 'end' }, g).textContent = String(v);
+    }
+
+    // x ticks: month starts on long ranges, sprint starts (Sundays) on short ones
+    var spanDays = (t1 - t0) / DAY, ticks = [], t, lastX = -1e9;
+    if (spanDays > 75) {
+      var dt = new Date(t0), y = dt.getUTCFullYear(), mo = dt.getUTCMonth();
+      for (;;) { t = Date.UTC(y, mo, 1); if (t > t1) break; if (t >= t0) ticks.push({ t: t, label: fmt(t, { month: 'short' }) }); mo++; if (mo > 11) { mo = 0; y++; } }
+    } else {
+      for (t = t0; t <= t1; t += DAY) if (new Date(t).getUTCDay() === 0) ticks.push({ t: t, label: fmt(t, { day: 'numeric', month: 'short' }) });
+    }
+    ticks.forEach(function (tk) {
+      var x = X(tk.t);
+      if (x - lastX < 52 || x > W - M.r - 14) return;
+      lastX = x;
+      el('line', { x1: x, x2: x, y1: H - M.b, y2: H - M.b + 4, stroke: 'var(--border)', 'stroke-width': 1 }, g);
+      el('text', { x: x, y: H - M.b + 17, 'text-anchor': x < M.l + 16 ? 'start' : 'middle' }, g).textContent = tk.label;
+    });
+
+    // boundaries: bounds[k] is the bottom of band k, bounds[k+1] its top
+    var bounds = [], k;
+    for (k = 0; k <= STATUSES.length; k++) bounds.push([]);
+    pts.forEach(function (p) {
+      var c = 0, x = X(p.t);
+      bounds[0].push({ x: x, y: Y(0) });
+      for (var j = 0; j < STATUSES.length; j++) { c += p.v[j]; bounds[j + 1].push({ x: x, y: Y(c) }); }
+    });
+    var bands = el('g', {}, svg);
+    for (k = 0; k < STATUSES.length; k++) {
+      if (!used[k]) continue;
+      var top = bounds[k + 1], bot = bounds[k];
+      var dPath = 'M' + f(top[0].x) + ' ' + f(top[0].y) + curve(top, false) +
+                  'L' + f(bot[bot.length - 1].x) + ' ' + f(bot[bot.length - 1].y) + curve(bot, true) + 'Z';
+      // 1.5px stroke in the panel colour leaves a thin gap between neighbouring bands
+      el('path', { d: dPath, fill: STATUSES[k].color, 'fill-opacity': 0.9, stroke: 'var(--panel)', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }, bands);
+    }
+
+    // marker where reconstructed history ends and exact daily counts begin
+    var cut = Date.UTC(+REBUILT_UNTIL.slice(0, 4), +REBUILT_UNTIL.slice(5, 7) - 1, +REBUILT_UNTIL.slice(8, 10));
+    if (t1 > cut && cut > t0) {
+      var cx = X(cut);
+      el('line', { x1: cx, x2: cx, y1: M.t - 4, y2: H - M.b, stroke: 'var(--muted)', 'stroke-width': 1, 'stroke-opacity': 0.7 }, svg);
+      var lab = el('text', { x: cx - 6, y: M.t + 6, 'text-anchor': 'end' }, svg);
+      lab.textContent = 'rebuilt history ends';
+    }
+
+    // one direct label: the total at the right end
+    var lastP = pts[pts.length - 1];
+    el('text', { x: X(lastP.t) + 7, y: Y(lastP.total) + 4, class: 'end' }, svg).textContent = String(lastP.total);
+
+    var hoverLayer = el('g', { 'pointer-events': 'none' }, svg);
+    el('rect', { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b, fill: 'transparent', id: 'hit' }, svg);
+    geo = { pts: pts, X: X, Y: Y, W: W, H: H, M: M, used: used, layer: hoverLayer };
+    if (state.hover >= 0) showHover(Math.min(state.hover, pts.length - 1));
+  }
+
+  function showHover(i) {
+    if (!geo) return;
+    state.hover = i;
+    var p = geo.pts[i], x = geo.X(p.t), layer = geo.layer;
+    layer.textContent = '';
+    el('line', { x1: x, x2: x, y1: geo.M.t, y2: geo.H - geo.M.b, stroke: 'var(--text)', 'stroke-width': 1, 'stroke-opacity': 0.55 }, layer);
+    var c = 0;
+    STATUSES.forEach(function (s, k) {
+      c += p.v[k];
+      if (!geo.used[k] || !p.v[k]) return;
+      el('circle', { cx: x, cy: geo.Y(c), r: 4, fill: s.color, stroke: 'var(--panel)', 'stroke-width': 2 }, layer);
+    });
+
+    tip.textContent = '';
+    h('div', 'when', (state.detail === 'week' ? 'Week ending ' : '') + fmt(p.t, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' + sprintLabel(p.t), tip);
+    for (var k = STATUSES.length - 1; k >= 0; k--) {       // top band first, matching the picture
+      if (!geo.used[k]) continue;
+      var row = h('div', 'row', null, tip);
+      var key = h('span', 'key', null, row); key.style.background = STATUSES[k].color;
+      h('span', 'name', STATUSES[k].label, row);
+      h('span', 'val', String(p.v[k]), row);
+    }
+    var sum = h('div', 'row sum', null, tip);
+    h('span', null, '', sum); h('span', 'name', 'Total', sum); h('span', 'val', String(p.total), sum);
+    tip.hidden = false;
+    var scale = chartBox.clientWidth / geo.W, px = x * scale, tw = tip.offsetWidth, th = tip.offsetHeight;
+    var left = px + 14;
+    if (left + tw > chartBox.clientWidth) left = px - 14 - tw;
+    if (left < 0) left = Math.max(0, Math.min(chartBox.clientWidth - tw, px - tw / 2));
+    tip.style.left = left + 'px';
+    tip.style.top = Math.max(0, Math.min(geo.M.t + 4, geo.H - th)) + 'px';
+  }
+  function hideTip() { tip.hidden = true; if (geo) geo.layer.textContent = ''; }
+  function nearest(clientX) {
+    var rect = svg.getBoundingClientRect(), x = (clientX - rect.left) * (geo.W / rect.width), best = 0, bd = Infinity;
+    geo.pts.forEach(function (p, i) { var dd = Math.abs(geo.X(p.t) - x); if (dd < bd) { bd = dd; best = i; } });
+    return best;
+  }
+  svg.addEventListener('pointermove', function (e) { if (geo) showHover(nearest(e.clientX)); });
+  svg.addEventListener('pointerdown', function (e) { if (geo) showHover(nearest(e.clientX)); });
+  svg.addEventListener('pointerleave', function () { state.hover = -1; hideTip(); });
+  svg.addEventListener('blur', function () { state.hover = -1; hideTip(); });
+  svg.addEventListener('keydown', function (e) {
+    if (!geo) return;
+    var n = geo.pts.length, i = state.hover < 0 ? n - 1 : state.hover;
+    if (e.key === 'ArrowLeft') i = Math.max(0, state.hover < 0 ? n - 1 : i - 1);
+    else if (e.key === 'ArrowRight') i = Math.min(n - 1, state.hover < 0 ? n - 1 : i + 1);
+    else if (e.key === 'Home') i = 0;
+    else if (e.key === 'End') i = n - 1;
+    else if (e.key === 'Escape') { state.hover = -1; hideTip(); return; }
+    else return;
+    e.preventDefault(); showHover(i);
+  });
+
+  function renderTable(pts, used) {
+    var table = $('table'); table.textContent = '';
+    var thead = h('thead', null, null, table), hr = h('tr', null, null, thead);
+    h('th', null, state.detail === 'week' ? 'Week ending' : 'Day', hr);
+    h('th', null, 'Sprint', hr);
+    var cols = []; for (var c = STATUSES.length - 1; c >= 0; c--) if (used[c]) cols.push(c);
+    cols.forEach(function (k) { h('th', null, STATUSES[k].label, hr); });
+    h('th', null, 'Total', hr);
+    var tbody = h('tbody', null, null, table);
+    for (var i = pts.length - 1; i >= 0; i--) {
+      var p = pts[i], tr = h('tr', null, null, tbody);
+      h('td', null, fmt(p.t, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }), tr);
+      h('td', null, sprintLabel(p.t), tr);
+      cols.forEach(function (k) { h('td', null, String(p.v[k]), tr); });
+      h('td', null, String(p.total), tr);
+    }
+  }
+
+  function renderFootnote(days) {
+    var note = state.detail === 'week'
+      ? 'Weekly shows the count at the end of each week (Saturday, or the latest day for the current week), joined by a smooth curve. '
+      : 'Daily shows the count at the end of each day. ';
+    note += 'Days up to 1 Oct 2026 were rebuilt from Notion’s transition timestamps, so the To Do and In Progress bands before that date are approximate. Later days are exact end-of-day counts.';
+    var fn = $('footnote'); fn.textContent = ''; h('span', null, note, fn);
+  }
+
+  // controls
+  document.querySelectorAll('[data-range]').forEach(function (b) {
+    b.addEventListener('click', function () { state.range = b.dataset.range; state.hover = -1; try { localStorage.setItem('cfd-range', state.range); } catch (e) {} render(); });
+  });
+  document.querySelectorAll('[data-detail]').forEach(function (b) {
+    b.addEventListener('click', function () { state.detail = b.dataset.detail; state.hover = -1; try { localStorage.setItem('cfd-detail', state.detail); } catch (e) {} render(); });
+  });
+  var lastW = 0;
+  if (window.ResizeObserver) new ResizeObserver(function () {
+    var w = Math.floor(chartBox.clientWidth);
+    if (w && Math.abs(w - lastW) > 1) { lastW = w; render(); }
+  }).observe(chartBox);
+
+  // ---- data.json sits next to this page and is rewritten every night (falls back to the copy saved in the page) ----
+  var badge = $('badge'), notice = $('notice'), refresh = $('refresh');
+  function setBadge(text, live) { badge.textContent = text; badge.className = live ? 'badge live' : 'badge'; }
+  function say(text) { notice.textContent = text || ''; notice.hidden = !text; }
+  var savedDay = savedData.length ? fmt(savedData[savedData.length - 1].t, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+
+  function load(manual) {
+    if (manual) say('Checking for newer numbers…');
+    fetch('data.json?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (j) {
+        var parsed = parsePacked(j && j.packed);
+        if (!parsed.length) throw new Error('empty');
+        state.data = parsed;
+        setBadge('Updated nightly', true);
+        say('');
+        render();
+      })
+      .catch(function () {
+        if (state.data === savedData) {
+          setBadge('Saved copy', false);
+          say('Couldn’t load the latest numbers. Showing the copy saved on ' + savedDay + '.');
+        } else {
+          say('Couldn’t check for newer numbers just now. Keeping the ones already shown.');
+        }
+      });
+  }
+  function startLive() {
+    if (!window.fetch) return;
+    refresh.hidden = false;
+    refresh.addEventListener('click', function () { load(true); });
+    load(false);
+    // A Notion embed can stay open for days: look again every hour and whenever the tab comes back.
+    setInterval(function () { load(false); }, 3600000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) load(false); });
+  }
+
+  render();
+  startLive();
+})();
+</script>
+
+</body>
+</html>
