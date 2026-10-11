@@ -1,0 +1,166 @@
+# Rewrites data.json every night from the "Jira Flow Snapshots" database in Notion,
+# so the Cumulative Flow chart embedded in Notion shows the latest day.
+# Needs one repository secret: NOTION_TOKEN (a read-only Notion connection that can see that database).
+name: Update chart data
+
+on:
+  schedule:
+    # Times are UTC. The Notion snapshot is written at 23:50 in São Paulo (02:50 UTC).
+    - cron: '25 3 * * *'   # 00:25 São Paulo
+    - cron: '25 9 * * *'   # 06:25 São Paulo, in case the first run was late or failed
+  workflow_dispatch:        # adds a "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-chart-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Get the repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" site
+
+      - name: Read Notion and rewrite data.json
+        working-directory: site
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, sys, time, urllib.error, urllib.request
+
+          DATA_SOURCE = '19cce26f-e611-411e-9d03-b92847ac6b1d'   # Jira Flow Snapshots (data source)
+          DATABASE = 'dd385834d5dd457cb9b8d0b4006db58e'           # Jira Flow Snapshots (database)
+          ORDER = ['Done', 'Scrapped', 'In Progress', 'Blocked', 'To Do', 'Backlog']   # order the chart page expects
+          API = os.environ.get('NOTION_API', 'https://api.notion.com')
+          TOKEN = os.environ.get('NOTION_TOKEN', '').strip()
+
+
+          def stop(message):
+              print('::error::' + message)
+              sys.exit(1)
+
+
+          def post(path, version, body):
+              request = urllib.request.Request(
+                  API + path, data=json.dumps(body).encode(), method='POST',
+                  headers={'Authorization': 'Bearer ' + TOKEN, 'Notion-Version': version,
+                           'Content-Type': 'application/json'})
+              for attempt in range(5):
+                  try:
+                      with urllib.request.urlopen(request, timeout=60) as response:
+                          return json.load(response)
+                  except urllib.error.HTTPError as error:
+                      if error.code in (429, 500, 502, 503, 504) and attempt < 4:
+                          time.sleep(min(float(error.headers.get('Retry-After') or 2 * (attempt + 1)), 30))
+                          continue
+                      raise
+                  except urllib.error.URLError:
+                      if attempt < 4:
+                          time.sleep(2 * (attempt + 1))
+                          continue
+                      raise
+
+
+          def query_all(path, version):
+              pages, cursor = [], None
+              while True:
+                  body = {'page_size': 100}
+                  if cursor:
+                      body['start_cursor'] = cursor
+                  answer = post(path, version, body)
+                  pages += answer.get('results', [])
+                  if not answer.get('has_more'):
+                      return pages
+                  cursor = answer.get('next_cursor')
+                  if not cursor:
+                      stop('Notion said there were more rows but gave no cursor. Nothing was changed.')
+
+
+          if not TOKEN:
+              stop('The NOTION_TOKEN secret is missing. Add it under Settings > Secrets and variables > Actions.')
+
+          try:
+              try:
+                  pages = query_all('/v1/data_sources/' + DATA_SOURCE + '/query', '2025-09-03')
+              except urllib.error.HTTPError as error:
+                  if error.code not in (400, 404):
+                      raise
+                  pages = query_all('/v1/databases/' + DATABASE + '/query', '2022-06-28')
+          except urllib.error.HTTPError as error:
+              detail = error.read().decode('utf-8', 'replace')[:300]
+              if error.code == 401:
+                  stop('Notion rejected the token (401). Check the NOTION_TOKEN secret.')
+              if error.code == 403:
+                  stop('The Notion connection is not allowed to read content (403). Turn on "Read content" for it.')
+              if error.code == 404:
+                  stop('Notion cannot see the Jira Flow Snapshots database (404). '
+                       'Give the connection access to that database in Notion.')
+              stop('Notion answered with an error (%s): %s' % (error.code, detail))
+
+          days, edited, ignored = {}, {}, 0
+          for page in pages:
+              if page.get('in_trash') or page.get('archived'):
+                  continue
+              props = page.get('properties', {})
+              date = ((props.get('Date') or {}).get('date') or {}).get('start')
+              status = ((props.get('Status') or {}).get('select') or {}).get('name')
+              count = (props.get('Count') or {}).get('number')
+              if not date or status not in ORDER or count is None:
+                  ignored += 1
+                  continue
+              key = (date[:10], status)
+              stamp = page.get('last_edited_time', '')
+              if key in edited:
+                  print('::warning::Two rows for %s / %s. Using the one edited last.' % key)
+                  if stamp < edited[key]:
+                      continue
+              edited[key] = stamp
+              days.setdefault(date[:10], {})[status] = int(round(count))
+
+          if ignored:
+              print('Ignored %d rows without a date, a known status or a count.' % ignored)
+          if not days:
+              stop('Notion returned no usable snapshot rows. Nothing was changed.')
+
+          packed = ';'.join(
+              day + ':' + ','.join(str(days[day].get(status, 0)) for status in ORDER) for day in sorted(days))
+
+          old = ''
+          try:
+              with open('data.json', encoding='utf-8') as handle:
+                  old = json.load(handle).get('packed', '')
+          except (OSError, ValueError):
+              pass
+          old_days = [part.split(':')[0] for part in old.split(';') if ':' in part]
+          if old_days and (len(days) < len(old_days) or max(days) < max(old_days)):
+              stop('Notion returned fewer days (%d, up to %s) than data.json already has (%d, up to %s). '
+                   'Nothing was changed.' % (len(days), max(days), len(old_days), max(old_days)))
+
+          if packed == old:
+              print('No change: %d days, latest %s.' % (len(days), max(days)))
+          else:
+              stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+              with open('data.json', 'w', encoding='utf-8') as handle:
+                  json.dump({'updated': stamp, 'packed': packed}, handle, separators=(',', ':'))
+              print('data.json rewritten: %d days, latest %s (%s).' % (len(days), max(days), packed.rsplit(';', 1)[-1]))
+          PY
+
+      - name: Save the new numbers
+        working-directory: site
+        run: |
+          if git diff --quiet -- data.json; then
+            echo "Nothing new to save."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data.json
+            git commit -m "Update chart data"
+            git push
+          fi
