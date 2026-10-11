@@ -480,26 +480,46 @@
   function say(text) { notice.textContent = text || ''; notice.hidden = !text; }
   var savedDay = savedData.length ? fmt(savedData[savedData.length - 1].t, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 
-  function load(manual) {
-    if (manual) say('Checking for newer numbers…');
-    fetch('data.json?t=' + Date.now(), { cache: 'no-store' })
+  // Two places hold the numbers. The copy served next to this page only changes when the site is rebuilt;
+  // the copy in the repository changes every night, so the freshest one wins.
+  function repoDataUrl() {
+    var m = /^([a-z0-9-]+)\.github\.io$/i.exec(location.hostname);
+    var repo = location.pathname.split('/')[1];
+    return m && repo ? 'https://api.github.com/repos/' + m[1] + '/' + repo + '/contents/data.json' : null;
+  }
+  function fromSite() {
+    return fetch('data.json?t=' + Date.now(), { cache: 'no-store' })
       .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
-      .then(function (j) {
-        var parsed = parsePacked(j && j.packed);
-        if (!parsed.length) throw new Error('empty');
-        state.data = parsed;
+      .then(function (j) { return parsePacked(j && j.packed); });
+  }
+  function fromRepo() {
+    var url = repoDataUrl();
+    if (!url) return Promise.resolve([]);
+    return fetch(url, { cache: 'no-store' })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (j) { return parsePacked(JSON.parse(atob(String(j.content || '').replace(/\s/g, ''))).packed); });
+  }
+  function settle(p) { return p.then(function (v) { return v; }, function () { return []; }); }
+
+  var lastLoad = 0;
+  function load(manual) {
+    if (!manual && Date.now() - lastLoad < 600000) return;   // at most one automatic check every 10 minutes
+    lastLoad = Date.now();
+    if (manual) say('Checking for newer numbers…');
+    Promise.all([settle(fromRepo()), settle(fromSite())]).then(function (got) {
+      var best = got[0].length && (!got[1].length || got[0][got[0].length - 1].t >= got[1][got[1].length - 1].t) ? got[0] : got[1];
+      if (best.length) {
+        state.data = best;
         setBadge('Updated nightly', true);
         say('');
         render();
-      })
-      .catch(function () {
-        if (state.data === savedData) {
-          setBadge('Saved copy', false);
-          say('Couldn’t load the latest numbers. Showing the copy saved on ' + savedDay + '.');
-        } else {
-          say('Couldn’t check for newer numbers just now. Keeping the ones already shown.');
-        }
-      });
+      } else if (state.data === savedData) {
+        setBadge('Saved copy', false);
+        say('Couldn’t load the latest numbers. Showing the copy saved on ' + savedDay + '.');
+      } else {
+        say('Couldn’t check for newer numbers just now. Keeping the ones already shown.');
+      }
+    });
   }
   function startLive() {
     if (!window.fetch) return;
